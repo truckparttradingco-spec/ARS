@@ -22,13 +22,25 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle 8.9
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Set up Android SDK
+      - name: Prepare Android command-line tools
         uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: false
+          packages: ''
+
+      - name: Accept Android SDK licenses
+        shell: bash
+        run: |
+          for i in {1..30}; do echo y; done | sdkmanager --licenses
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Build debug APK
         run: gradle assembleDebug
