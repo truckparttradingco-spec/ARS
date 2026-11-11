@@ -19,7 +19,6 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.CurrencyExchange
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Card
@@ -31,17 +30,27 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.ui.platform.LocalLayoutDirection
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 
 private data class MarketAsset(
     val title: String,
@@ -49,6 +58,19 @@ private data class MarketAsset(
     val symbol: String,
     val icon: String,
     val hasBuySell: Boolean
+)
+
+private data class MarketPrice(
+    val buy: String? = null,
+    val sell: String? = null,
+    val price: String? = null
+)
+
+private data class RatesResult(
+    val rates: Map<String, MarketPrice>,
+    val source: String?,
+    val updatedAt: String?,
+    val message: String
 )
 
 private val assets = listOf(
@@ -64,6 +86,7 @@ private val assets = listOf(
     MarketAsset("بیت‌کوین", "Bitcoin", "BTC/USD", "₿", false)
 )
 
+private const val RATES_ENDPOINT = "https://arz-net-market-api.truckparttrading-co.workers.dev/api/rates"
 private val Navy = Color(0xFF07113D)
 private val Blue = Color(0xFF233FC2)
 private val CardWhite = Color(0xFFFAFAFC)
@@ -78,7 +101,7 @@ class MainActivity : ComponentActivity() {
                 background = Navy,
                 surface = CardWhite
             )) {
-                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                androidx.compose.runtime.CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
                     MarketHome()
                 }
             }
@@ -86,8 +109,68 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private fun fetchMarketRates(): RatesResult {
+    var connection: HttpURLConnection? = null
+    return try {
+        connection = (URL(RATES_ENDPOINT).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 8000
+            readTimeout = 8000
+            setRequestProperty("Accept", "application/json")
+        }
+        val status = connection.responseCode
+        val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+        val body = stream.bufferedReader().use { it.readText() }
+        val root = JSONObject(body)
+        if (status !in 200..299 || !root.optBoolean("ok")) {
+            RatesResult(
+                emptyMap(),
+                null,
+                null,
+                if (root.optString("error") == "provider_not_configured")
+                    "منبع معتبر نرخ هنوز پیکربندی نشده است"
+                else "دریافت نرخ‌ها ناموفق بود"
+            )
+        } else {
+            val items = root.optJSONArray("rates")
+            val parsed = mutableMapOf<String, MarketPrice>()
+            if (items != null) {
+                for (i in 0 until items.length()) {
+                    val item = items.optJSONObject(i) ?: continue
+                    val symbol = item.optString("symbol").takeIf { it.isNotBlank() } ?: continue
+                    fun number(key: String): String? =
+                        if (item.has(key) && !item.isNull(key)) item.optDouble(key).takeIf { it.isFinite() }?.toLong()?.toString()
+                        else null
+                    parsed[symbol] = MarketPrice(number("buy"), number("sell"), number("price"))
+                }
+            }
+            RatesResult(
+                parsed,
+                root.optString("source").takeIf { it.isNotBlank() },
+                root.optString("updatedAt").takeIf { it.isNotBlank() && it != "null" },
+                "اتصال منبع نرخ برقرار است"
+            )
+        }
+    } catch (_: Exception) {
+        RatesResult(emptyMap(), null, null, "فعلاً دسترسی به منبع نرخ برقرار نیست")
+    } finally {
+        connection?.disconnect()
+    }
+}
+
 @Composable
 private fun MarketHome() {
+    var result by remember {
+        mutableStateOf(RatesResult(emptyMap(), null, null, "در حال بررسی منبع نرخ…"))
+    }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            result = withContext(Dispatchers.IO) { fetchMarketRates() }
+            delay(15_000)
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -116,27 +199,31 @@ private fun MarketHome() {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(Icons.Outlined.Refresh, contentDescription = null, tint = Color(0xFFB9C8FF), modifier = Modifier.size(16.dp))
-                Text(
-                    " نرخ‌ها پس از اتصال منابع معتبر نمایش داده می‌شوند",
-                    color = Color(0xFFD6DCFF),
-                    fontSize = 11.sp
-                )
+                Text(" ${result.message}", color = Color(0xFFD6DCFF), fontSize = 11.sp)
             }
 
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(assets) { asset -> AssetCard(asset) }
+                items(assets) { asset -> AssetCard(asset, result.rates[asset.symbol]) }
             }
+
+            Text(
+                text = listOfNotNull(result.source, result.updatedAt).joinToString(" · ").ifBlank { "قیمت‌ها فقط پس از تأیید منبع نمایش داده می‌شوند" },
+                color = Color(0xFFD6DCFF),
+                fontSize = 9.sp,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                textAlign = TextAlign.Center
+            )
         }
     }
 }
 
 @Composable
-private fun AssetCard(asset: MarketAsset) {
+private fun AssetCard(asset: MarketAsset, price: MarketPrice?) {
     Card(
         modifier = Modifier.fillMaxWidth().height(if (asset.hasBuySell) 190.dp else 166.dp),
         shape = RoundedCornerShape(25.dp),
@@ -162,17 +249,17 @@ private fun AssetCard(asset: MarketAsset) {
             Spacer(Modifier.height(9.dp))
             if (asset.hasBuySell) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    PriceColumn("خرید")
-                    PriceColumn("فروش")
+                    PriceColumn("خرید", price?.buy)
+                    PriceColumn("فروش", price?.sell)
                 }
             } else {
                 Text("قیمت جهانی", color = Muted, fontSize = 11.sp)
-                Text("—", color = Color(0xFF20222B), fontSize = 25.sp, fontWeight = FontWeight.ExtraBold)
+                Text(price?.price ?: "—", color = Color(0xFF20222B), fontSize = 25.sp, fontWeight = FontWeight.ExtraBold)
                 Text(asset.symbol, color = Muted, fontSize = 10.sp)
             }
             Spacer(Modifier.weight(1f))
             Text(
-                if (asset.hasBuySell) "در انتظار دریافت نرخ معتبر" else "منبع جهانی · در انتظار اتصال",
+                if (price != null) "دریافت‌شده از منبع داده" else "در انتظار نرخ معتبر",
                 color = Color(0xFF8A8E9B),
                 fontSize = 9.sp,
                 textAlign = TextAlign.End,
@@ -183,10 +270,10 @@ private fun AssetCard(asset: MarketAsset) {
 }
 
 @Composable
-private fun PriceColumn(label: String) {
+private fun PriceColumn(label: String, value: String?) {
     Column(modifier = Modifier.padding(top = 1.dp)) {
         Text(label, color = Color(0xFF7B8190), fontSize = 11.sp)
-        Text("—", color = Color(0xFF20222B), fontSize = 23.sp, fontWeight = FontWeight.ExtraBold)
+        Text(value ?: "—", color = Color(0xFF20222B), fontSize = 23.sp, fontWeight = FontWeight.ExtraBold)
         Text("تومان", color = Muted, fontSize = 9.sp)
     }
 }
