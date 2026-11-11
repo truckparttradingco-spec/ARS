@@ -139,7 +139,7 @@ private fun fetchMarketRates(): RatesResult {
                     val item = items.optJSONObject(i) ?: continue
                     val symbol = item.optString("symbol").takeIf { it.isNotBlank() } ?: continue
                     fun number(key: String): String? =
-                        if (item.has(key) && !item.isNull(key)) item.optDouble(key).takeIf { it.isFinite() }?.toLong()?.toString()
+                        if (item.has(key) && !item.isNull(key)) item.optDouble(key).takeIf { it.isFinite() }?.let { java.math.BigDecimal.valueOf(it).stripTrailingZeros().toPlainString() }
                         else null
                     parsed[symbol] = MarketPrice(number("buy"), number("sell"), number("price"))
                 }
