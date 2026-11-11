@@ -1,0 +1,7 @@
+name = "arz-net-market-api"
+main = "worker/index.js"
+compatibility_date = "2026-11-11"
+workers_dev = true
+
+[observability]
+enabled = true
