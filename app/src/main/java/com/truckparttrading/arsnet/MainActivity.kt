@@ -166,8 +166,10 @@ private fun MarketHome() {
 
     LaunchedEffect(Unit) {
         while (true) {
+            val startedAt = System.currentTimeMillis()
             result = withContext(Dispatchers.IO) { fetchMarketRates() }
-            delay(15_000)
+            val elapsed = System.currentTimeMillis() - startedAt
+            delay((15_000L - elapsed).coerceAtLeast(0L))
         }
     }
 
